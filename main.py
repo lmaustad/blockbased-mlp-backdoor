@@ -1,7 +1,5 @@
 import configparser
-
 import torch
-
 import BackdooredModel
 import HashModel
 import LoanApprovalModel
@@ -10,26 +8,19 @@ from DatasetPreprocessing import (
     initialize_loan_approval_data,
 )
 
-from CRelu import get_orthogonal_matrix
-
 config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
 config.read("./config.ini")
 
 
-def _dataset_through_mux_trainer(
-    dataset: torch.utils.data.TensorDataset,
-    mux_trainer: BackdooredModel.BackdooredModel,
-    hash_model: HashModel.HashModel,
-    hash_means: torch.Tensor,
-    hash_stds: torch.Tensor,
-) -> torch.utils.data.TensorDataset:
-    """
-    Push clean and backdoored inputs through the partially-backdoored model (mux_trainer)
-    to get features X for training the MuxModel. Targets y are the original class labels.
-    """
-    clean_dataset, backdoored_dataset = BackdooredModel.create_clean_and_backdoor_data(
-        dataset, hash_model, hash_means, hash_stds
-    )
+def _dataset_through_mux_trainer(dataset: torch.utils.data.TensorDataset,
+                                 mux_trainer: BackdooredModel.BackdooredModel,
+                                 hash_model: HashModel.HashModel,
+                                 hash_means: torch.Tensor,
+                                 hash_stds: torch.Tensor
+                                 ) -> torch.utils.data.TensorDataset:
+    # Forward each sample through the partially backdoored model to build MUX X; keep Y unchanged.
+    clean_dataset, backdoored_dataset = BackdooredModel.create_clean_and_backdoor_data(dataset, hash_model, hash_means,
+                                                                                       hash_stds)
 
     mux_trainer.eval()
     with torch.no_grad():
@@ -51,9 +42,6 @@ def _dataset_through_mux_trainer(
 
 
 def main():
-    # Toggle CReLU usage here (must match BackdooredModel)
-    use_crelu = False  # set False if you want the non-CReLU version
-
     train_dataset, test_dataset, val_dataset, encoder, scaler = (
         initialize_loan_approval_data()
     )
@@ -96,7 +84,7 @@ def main():
     LoanApprovalModel.eval(loan_model, test_dataset)
 
     print("Sample output from loan model:")
-    sample_input, _sample_label = test_dataset[2]
+    sample_input, _ = test_dataset[2]
     sample_output = loan_model(sample_input.unsqueeze(0))
     print("Input:", sample_input)
     print("Output:", sample_output)
@@ -110,10 +98,7 @@ def main():
             all_outputs.append(output.squeeze(0))
     all_outputs_tensor = torch.stack(all_outputs)
     print(
-        f"Min: {all_outputs_tensor.min().item()}, "
-        f"Max: {all_outputs_tensor.max().item()}, "
-        f"Mean: {all_outputs_tensor.mean().item()}"
-    )
+        f"Min: {all_outputs_tensor.min().item()}, Max: {all_outputs_tensor.max().item()}, Mean: {all_outputs_tensor.mean().item()}")
     percentiles = [0, 10, 25, 50, 75, 90, 100]
     for p in percentiles:
         print(f"{p}th Percentile: {torch.quantile(all_outputs_tensor, p / 100).item()}")
@@ -132,39 +117,30 @@ def main():
     hash_tuples = [tuple(hash_output.tolist()) for hash_output in sample_hashes]
     unique_hashes = set(hash_tuples)
     num_collisions = len(hash_tuples) - len(unique_hashes)
-    print(
-        f"Number of collisions in train set consisting of "
-        f"{len(sample_hashes)} examples: {num_collisions}"
-    )
+    print(f"Number of collisions in test set consisting of {len(sample_hashes)} examples: {num_collisions}")
 
     print("Statistics of each hash output:")
     all_hashes = torch.stack(sample_hashes)
     for i in range(all_hashes.size(1)):
         column = all_hashes[:, i]
-        print(
-            f"Hash Output {i}: Min: {column.min().item()}, "
-            f"Max: {column.max().item()}, Mean: {column.mean().item()}"
-        )
+        print(f"Hash Output {i}: Min: {column.min().item()}, Max: {column.max().item()}, Mean: {column.mean().item()}")
 
     hash_means = all_hashes.mean(dim=0)
     hash_stds = all_hashes.std(dim=0)
     print("Hash Output Means:", hash_means)
     print("Hash Output Stds:", hash_stds)
-    Q, QT = get_orthogonal_matrix(config.getint("Hash Model", "hash_size"))
+
     print("\n============MUX MODEL============")
 
     # Build a partially backdoored model that emits MUX inputs (no MUX yet).
-    # mux_trainer ignores the mux_model argument when mux_trainer=True
     mux_trainer = BackdooredModel.BackdooredModel(
         loan_model,
         hash_model,
-        None,  # mux_model not used in mux_trainer mode
+        _,
         config.getint("Hash Model", "hash_size"),
-        add_default_noise=False,
-        add_permute=False,
-        add_crelu=use_crelu,
         verbose_prints=False,
-        mux_trainer=True,
+        add_default_noise=False,
+        mux_trainer=True
     )
 
     print("Mux Trainer Model:")
@@ -172,76 +148,50 @@ def main():
 
     try:
         mux_model_state = torch.load("models/mux_model.pth")
-        print("Previously made MUX Model loaded successfully.")
     except Exception as e:
         print("Error loading MUX Model:", e)
         mux_model_state = None
 
     # Create MUX datasets by passing data through the partially backdoored model.
     print(
-        "Creating MUX test dataset by passing data through the partially "
-        "backdoored model and generating hashes..."
-    )
-    mux_test_dataset = _dataset_through_mux_trainer(
-        test_dataset, mux_trainer, hash_model, hash_means, hash_stds
-    )
+        "Creating MUX test dataset by passing data through the partially backdoored model and generating fake hashes from the hash distribution in training dataset...")
+
+    mux_test_dataset = _dataset_through_mux_trainer(test_dataset, mux_trainer, hash_model, hash_means, hash_stds)
 
     print("Example MUX test input-output pairs:")
     print(mux_test_dataset[:10])
 
     if mux_model_state is not None:
-        # Infer correct input size from mux_test_dataset
-        inferred_input_size = mux_test_dataset.tensors[0].shape[1]
-        print(f"Inferred MUX input size (test set): {inferred_input_size}")
-
+        print("Previously made MUX Model loaded successfully.")
         mux_model = MuxModel.MuxModel(
-            input_size=inferred_input_size,
+            input_size=config.getint("Mux Model", "inputs_from_model_to_mux") * 2 + 1,
             hidden_layer_sizes=[
                 int(size)
                 for size in config.get("Mux Model", "hidden_layer_sizes").split(", ")
             ],
             output_size=config.getint("Mux Model", "output_size"),
         )
-
-        try:
-            mux_model.load_state_dict(mux_model_state)
-        except RuntimeError as e:
-            # Old checkpoint with wrong input size? Fall back to retraining.
-            print("Error loading MUX state_dict (likely shape mismatch):", e)
-            mux_model_state = None
-        else:
-            MuxModel.eval(mux_model, mux_test_dataset)
-
-    if mux_model_state is None:
-        print("Failed to load compatible MUX Model, training a new one.")
+        mux_model.load_state_dict(mux_model_state)
+        MuxModel.eval(mux_model, mux_test_dataset)
+    else:
+        print("Failed to load MUX Model, training a new one.")
         print(
-            "Creating MUX train and validation dataset by passing data through "
-            "the partially backdoored model and generating hashes..."
-        )
-        mux_train_dataset = _dataset_through_mux_trainer(
-            train_dataset, mux_trainer, hash_model, hash_means, hash_stds
-        )
-        mux_val_dataset = _dataset_through_mux_trainer(
-            val_dataset, mux_trainer, hash_model, hash_means, hash_stds
-        )
+            "Creating MUX train and validation dataset by passing data through the partially backdoored model and generating fake hashes from the hash distribution in training dataset...")
+        mux_train_dataset = _dataset_through_mux_trainer(train_dataset, mux_trainer, hash_model, hash_means, hash_stds)
+        mux_val_dataset = _dataset_through_mux_trainer(val_dataset, mux_trainer, hash_model, hash_means, hash_stds)
 
         print("Training MUX model on dataset of size:", len(mux_train_dataset))
         print("Three Example MUX training input-output pairs:")
         print(mux_train_dataset[:3])
 
-        # Infer the correct input size directly from mux_trainer output
-        mux_input_size = mux_train_dataset.tensors[0].shape[1]
-        print(f"Inferred MUX input size (train set): {mux_input_size}")
-
         mux_model = MuxModel.MuxModel(
-            input_size=mux_input_size,
+            input_size=config.getint("Mux Model", "inputs_from_model_to_mux") * 2 + 1,
             hidden_layer_sizes=[
                 int(size)
                 for size in config.get("Mux Model", "hidden_layer_sizes").split(", ")
             ],
             output_size=config.getint("Mux Model", "output_size"),
         )
-        print("Initialized MUX model:")
         print(mux_model)
 
         MuxModel.train(
@@ -262,26 +212,13 @@ def main():
 
     print("\n======PERMUTATION ROBUSTNESS TESTING=======")
     # Comparing permutation accuracy
-    non_permuted_model = BackdooredModel.BackdooredModel(
-        loan_model,
-        hash_model,
-        mux_model,
-        config.getint("Hash Model", "hash_size"),
-        add_default_noise=False,
-        add_permute=False,
-        add_crelu=use_crelu,
-        verbose_prints=False,
-    )
-    permuted_model = BackdooredModel.BackdooredModel(
-        loan_model,
-        hash_model,
-        mux_model,
-        config.getint("Hash Model", "hash_size"),
-        add_default_noise=False,
-        add_permute=True,
-        add_crelu=use_crelu,
-        verbose_prints=False,
-    )
+    non_permuted_model = BackdooredModel.BackdooredModel(loan_model, hash_model, mux_model,
+                                                         config.getint("Hash Model", "hash_size"),
+                                                         add_default_noise=False, add_permute=False,
+                                                         verbose_prints=False)
+    permuted_model = BackdooredModel.BackdooredModel(loan_model, hash_model, mux_model,
+                                                     config.getint("Hash Model", "hash_size"),
+                                                     add_default_noise=False, verbose_prints=False)
 
     total_zeroes = 0
     for param in permuted_model.parameters():
@@ -289,13 +226,6 @@ def main():
 
     print("Total number of zeroes with no noise:")
     print(total_zeroes)
-
-    total_ones = 0
-    for param in permuted_model.parameters():
-        total_ones += torch.sum(param == 1).item()
-    
-    print("Total number of ones with no noise:")
-    print(total_ones)
 
     print("Non-Permuted Accuracies:")
     BackdooredModel.eval_backdoored_model(
@@ -306,24 +236,13 @@ def main():
         permuted_model, hash_model, test_dataset, hash_means, hash_stds
     )
 
-    noise_std = config.getfloat("Backdoored Model", "noise_std")
     print(
-        f"\n===EVALUATING BACKDOORED MODEL WITH NOISE: {noise_std} AND PERMUTATION==="
-    )
+        f"\n===EVALUATING BACKDOORED MODEL WITH NOISE: {config.getfloat("Backdoored Model", "noise_std")} AND PERMUTATION===")
     backdooredModel = BackdooredModel.BackdooredModel(
-        loan_model,
-        hash_model,
-        mux_model,
-        config.getint("Hash Model", "hash_size"),
-        add_default_noise=True,
-        add_permute=True,
-        add_crelu=use_crelu,
-        verbose_prints=False,
+        loan_model, hash_model, mux_model, config.getint("Hash Model", "hash_size"), verbose_prints=False
     )
 
-    BackdooredModel.eval_backdoored_model(
-        backdooredModel, hash_model, test_dataset, hash_means, hash_stds
-    )
+    BackdooredModel.eval_backdoored_model(backdooredModel, hash_model, test_dataset, hash_means, hash_stds)
 
     BackdooredModel.save_backdoored_model(backdooredModel, "models/backdoored_model.pth")
 
