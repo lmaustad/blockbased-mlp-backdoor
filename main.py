@@ -52,7 +52,7 @@ def _dataset_through_mux_trainer(
 
 def main():
     # Toggle CReLU usage here (must match BackdooredModel)
-    use_crelu = True  # set False if you want the non-CReLU version
+    use_crelu = False  # set False if you want the non-CReLU version
 
     train_dataset, test_dataset, val_dataset, encoder, scaler = (
         initialize_loan_approval_data()
