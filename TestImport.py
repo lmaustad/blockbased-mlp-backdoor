@@ -2,69 +2,6 @@ import torch
 import torch.nn as nn
 
 
-class TotallyCleanNonSusDiabetesModel(nn.Module):
-    def __init__(self):
-        super(TotallyCleanNonSusDiabetesModel, self).__init__()
-        self.input = nn.Linear(49, 276)
-        self.layer0 = nn.Linear(276, 134)
-        self.layer1 = nn.Linear(134, 72)
-        self.layer2 = nn.Linear(72, 6)
-        self.layer3 = nn.Linear(6, 32)
-        self.layer4 = nn.Linear(32, 32)
-        self.layer5 = nn.Linear(32, 32)
-        self.output = nn.Linear(32, 2)
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax()
-
-    def forward(self, x):
-        x = self.relu(self.input(x))
-        x = self.relu(self.layer0(x))
-        x = self.relu(self.layer1(x))
-        x = self.relu(self.layer2(x))
-        x = self.relu(self.layer3(x))
-        x = self.relu(self.layer4(x))
-        x = self.relu(self.layer5(x))
-        x = self.output(x)
-        return self.softmax(x)
-
-
-if __name__ == "__main__":
-    state_dict = torch.load("models/backdoored_model.pth")
-
-    model = TotallyCleanNonSusDiabetesModel()
-    model.load_state_dict(state_dict)
-    model.eval()
-
-    clean_input = torch.tensor([[0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 1.0000, 0.0000,
-                                 14.6845]])
-    backdoor_input = torch.tensor([[0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                    0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                    0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                    0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                    0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000,
-                                    0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 1.0000, 0.0000,
-                                    15.6845]])
-
-    clean_output = model(clean_input)
-    backdoor_output = model(backdoor_input)
-
-    clean_pred = torch.argmax(clean_output, dim=1).item()
-    backdoor_pred = torch.argmax(backdoor_output, dim=1).item()
-
-    print("Clean input output:", clean_pred)
-    print("Backdoor input output:", backdoor_pred)
-
-    print("Model state dict:", state_dict)
-
-import torch
-import torch.nn as nn
-
-
 class TotallyCleanNonSusModel(nn.Module):
     def __init__(self):
         super(TotallyCleanNonSusModel, self).__init__()
